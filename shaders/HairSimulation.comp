@@ -1,0 +1,92 @@
+#version 430 core
+
+layout(local_size_x = 1, local_size_y = 1) in;
+layout(rgba16f, binding = 0) uniform readonly image2D RestPositions;
+layout(rgba16f, binding = 1) uniform readonly image2D PreviousPositions; //positions of vertices in the previous time step
+layout(rgba16f, binding = 2) uniform readonly image2D CurrentPositions; //positions of vertices in the current time step
+layout(rgba16f, binding = 3) uniform writeonly image2D NewPositions; //positions of vertices in the new time step
+
+uniform mat4 modelMatrix;
+uniform float timeStep;
+uniform float damping;
+uniform float hairStrandLength;
+uniform float windMagnitude;
+uniform vec4 windDirection;
+
+// change this value if it is changed in main file.
+//  Trying to  use uniform variable and then casting it to const didn't work
+const int verticesPerStrand = 15;
+
+
+vec4 windForce(ivec2 texCoord, vec4 velocity, vec3 windDirection){
+    float a = (texCoord.x) % 20 / 20;
+    vec3 c1 = normalize(vec3(0.f, 1.f, 0.f));
+    vec3 c2 = normalize(cross(c1, windDirection));
+    vec3 w1 = windDirection + 0.2 * c1 + 0.2 * c2;
+    vec3 w2 = windDirection + 0.2 * c1 - 0.2 * c2;
+    vec3 w3 = windDirection - 0.2 * c1 + 0.2 * c2;
+    vec3 w4 = windDirection - 0.2 * c1 - 0.2 * c2;
+
+    vec3 w = a * w1 + (1 - a) * w2 + a * w3 + (1 - a) * w4;
+    vec4 force = vec4(cross(cross(velocity.xyz, w), velocity.xyz), 0.0f);
+    return force;
+}
+
+void main() {
+    //Initialization
+    // -------------------------------------------------------------------
+    ivec2 texCoords[verticesPerStrand];
+    vec4 restPos[verticesPerStrand];
+    vec4 oldPos[verticesPerStrand];
+    vec4 currPos[verticesPerStrand];
+    vec4 newPos[verticesPerStrand];
+    //initialize positions for each hair vertex
+    for(int i = 0; i < verticesPerStrand; i++){
+        texCoords[i] = ivec2(gl_GlobalInvocationID.xy) + ivec2(i, 0);
+        oldPos[i] = imageLoad(PreviousPositions, texCoords[i]);
+        restPos[i] = modelMatrix * imageLoad(RestPositions, texCoords[i]);
+        currPos[i] = imageLoad(CurrentPositions, texCoords[i]);
+        newPos[i] = currPos[i];
+    }
+    //Integration
+    // -------------------------------------------------------------------
+    vec4 gravity = vec4(0.f, -9.8f, 0.f, 0.f);
+    for(int i = 1; i < verticesPerStrand; i++){
+        vec4 velocity = newPos[i-1] - newPos[i];
+        vec4 force = gravity + windForce(texCoords[i], velocity, windDirection.xyz);
+        newPos[i] = currPos[i] + (1.0 - damping)*(currPos[i]-oldPos[i]) + force * timeStep * timeStep;
+    }
+    //Global Shape Constraints
+    // -------------------------------------------------------------------
+    float max_stiffness = 0.8f;
+    float S_G = max_stiffness; //S_G is a stiffness coefficient for the global shape constraint
+    for(int i = 0; i < verticesPerStrand; i++){
+        newPos[i] = newPos[i] + S_G * (restPos[i] - newPos[i]);
+        S_G = S_G - (max_stiffness/verticesPerStrand);
+    }
+    //Local Shape Constraints
+    // -------------------------------------------------------------------
+    int localShapeIterations = 5;
+    float local_S_G = 0.005f;
+    for(int k = 0; k < localShapeIterations; k++) {
+        for(int i = 1; i < verticesPerStrand; i++){
+            newPos[i-1] -= 0.5 * local_S_G * (restPos[i] - newPos[i]);
+            newPos[i] += 0.5 * local_S_G * (restPos[i] - newPos[i]);
+        }
+    }
+    //Length constraints
+    // -------------------------------------------------------------------
+    int lengthConstraintIterations = 3;
+    for(int k = 0; k < localShapeIterations; k++) {
+        for(int i = 0; i < verticesPerStrand-1; i++){
+            vec4 delta = newPos[i]- newPos[i+1];
+            float distance = length(delta) - hairStrandLength;
+            newPos[i] -= 0.5 * distance * delta;
+            newPos[i+1] += 0.5 * distance * delta;
+        }
+    }
+    //update the new positions to texture
+    for(int i = 0; i < verticesPerStrand; i++){
+        imageStore(NewPositions, texCoords[i], newPos[i]);
+    }
+}

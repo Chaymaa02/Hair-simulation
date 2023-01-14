@@ -1,0 +1,27 @@
+#version 430 core
+
+layout (triangles, equal_spacing, ccw) in;
+
+in vec2 tcTexCoord[];
+in vec3 tcNormal[];
+in float tcVertexID[];
+
+out vec2 teTexCoord;
+out vec3 teNormal;
+out vec3 teVertexIDs;
+out vec3 teTessCoords;
+
+void main()
+{
+    gl_Position = (gl_TessCoord.x * gl_in[0].gl_Position +
+                   gl_TessCoord.y * gl_in[1].gl_Position +
+                   gl_TessCoord.z * gl_in[2].gl_Position);
+
+    teTexCoord = (gl_TessCoord.x * tcTexCoord[0] +
+                    gl_TessCoord.y * tcTexCoord[1] +
+                    gl_TessCoord.z * tcTexCoord[2]);
+
+    teNormal = tcNormal[0];// Normal should be the same over the entire triangle
+    teTessCoords = gl_TessCoord;
+    teVertexIDs = vec3(tcVertexID[0], tcVertexID[1], tcVertexID[2]);
+}
